@@ -41,9 +41,8 @@ namespace SQLiteORMapper {
                 if (tmpItem != null) {
 
                     tmpItem.Name = "NewTestName";
-                    Database.Update(conString, tmpItem);
+                    int numRowsUpdated = Database.Update(conString, tmpItem);
                 }
-
             }
             catch(Exception ex) {
 
