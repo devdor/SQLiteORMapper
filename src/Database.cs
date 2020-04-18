@@ -1,61 +1,42 @@
 ﻿using Microsoft.Data.Sqlite;
+using Microsoft.Extensions.Logging;
 using SQLiteORMapper.Dto;
 using System;
 using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations.Schema;
 using System.Data.Common;
+using System.IO;
 using System.Linq;
 
 namespace SQLiteORMapper {
     public class Database {
-
-        public static void InitDefault(string conString) {
-
-            if (String.IsNullOrEmpty(conString))
-                throw new ArgumentNullException("ConnectionString");
-
-            var catId = Create(conString,
-                Category.Create("Favorites"));
-
-            if (catId >= 0) {
-
-                var catItemId = Create(conString,
-                    CategoryItem.Create(catId, "Github"));
-
-                if (catItemId > 0) {
-
-                    Create(conString,
-                        ValueItem.Create(catItemId, 0, SecValueType.Url, "https://github.com"));
-
-                    Create(conString,
-                        ValueItem.Create(catItemId, 1, SecValueType.Username, "My Username"));
-
-                    Create(conString,
-                        ValueItem.Create(catItemId, 2, SecValueType.Password, "My Password"));
-                }
-
-                catItemId = Create(conString,
-                    CategoryItem.Create(catId, "Emailaccount"));
-
-                if (catItemId > 0) {
-
-                    Create(conString,
-                        ValueItem.Create(catItemId, 0, SecValueType.Url, "https://somewhere.com"));
-
-                    Create(conString,
-                        ValueItem.Create(catItemId, 1, SecValueType.Username, "My Username"));
-
-                    Create(conString,
-                        ValueItem.Create(catItemId, 2, SecValueType.Password, "My Password"));
-                }
-            }
+        #region Fields and Properties
+        public string ConString {
+            get;
+            private set;
         }
 
-        public static T Read<T>(string conString, Int64 id) {
-            if (String.IsNullOrEmpty(conString))
-                throw new ArgumentNullException("ConnectionString");
+        ILogger<Database> _logger;
+        #endregion
 
-            var tmpList = ReadList<T>(conString, new DbQueryItem("Id", CompareOp.EqualTo, id));
+        public Database(ILoggerFactory loggerFactory, FileInfo dbFileName) {
+
+            if (loggerFactory == null)
+                throw new ArgumentNullException("LoggerFactory");
+
+            if (dbFileName == null)
+                throw new ArgumentNullException("DbFileName");
+
+            if (!dbFileName.Exists)
+                throw new FileNotFoundException("DbFileName");
+
+            this._logger = loggerFactory.CreateLogger<Database>();
+            this.ConString = @$"Data Source={dbFileName.FullName}";
+        }
+
+        public T Read<T>(Int64 id) {
+            
+            var tmpList = ReadList<T>(new DbQueryItem("Id", CompareOp.EqualTo, id));
             if (!DictionaryUtils.IsNullOrEmpty(tmpList)) {
 
                 return tmpList.FirstOrDefault();
@@ -64,11 +45,11 @@ namespace SQLiteORMapper {
             return default(T);
         }
 
-        public static T Read<T>(string conString, params DbQueryItem?[] args) {
-            if (String.IsNullOrEmpty(conString))
+        public T Read<T>(params DbQueryItem[] args) {
+            if (String.IsNullOrEmpty(this.ConString))
                 throw new ArgumentNullException("ConnectionString");
 
-            var tmpList = ReadList<T>(conString, args);
+            var tmpList = ReadList<T>(args);
             if (!DictionaryUtils.IsNullOrEmpty(tmpList)) {
 
                 return tmpList.FirstOrDefault();
@@ -77,16 +58,16 @@ namespace SQLiteORMapper {
             return default(T);
         }
         
-        public static IList<T> ReadList<T>(string conString, params DbQueryItem?[] args) {
-            if (String.IsNullOrEmpty(conString))
-                throw new ArgumentNullException("ConnectionString");
+        public IList<T> ReadList<T>(params DbQueryItem[] args) {
+            if (String.IsNullOrEmpty(this.ConString))
+                throw new MissingFieldException("ConnectionString");
 
             Type dstType = typeof(T);
             var propList = dstType.GetProperties();
 
             if (GetTableInfo(dstType, out string tblName, out List<Tuple<string,Type>> colNameList)) {
 
-                using (var con = new SqliteConnection(conString)) {
+                using (var con = new SqliteConnection(this.ConString)) {
 
                     using (var cmd = con.CreateCommand()) {
 
@@ -118,7 +99,7 @@ namespace SQLiteORMapper {
                                     if (!String.IsNullOrEmpty(colName)) {
 
                                         whereItemList.Add(
-                                            $"{colName} {Util.ConvertCompareOp(arg.Op)} @{colName}");
+                                            $"{colName} {ConvertCompareOp(arg.Op)} @{colName}");
 
                                         cmd.Parameters.Add(new SqliteParameter($"@{colName}", arg.Value));
                                     }                                    
@@ -134,6 +115,7 @@ namespace SQLiteORMapper {
                         cmd.CommandText = cmdText;
                         con.Open();
 
+                        this._logger.LogDebug(cmd.CommandText);
                         using (var sqlReader = cmd.ExecuteReader()) {
 
                             var schemaInfo = sqlReader.GetColumnSchema();
@@ -233,20 +215,34 @@ namespace SQLiteORMapper {
                 }
             }
 
-            return default(IList<T>);
+            return default(IList<T>);        
         }
 
-        public static int Delete<T>(string conString, params DbQueryItem?[] args) {
+        public int Delete<T>(Int64 id) {
 
-            if (String.IsNullOrEmpty(conString))
-                throw new ArgumentNullException("ConnectionString");
+            return Delete<T>(
+                new DbQueryItem("Id", CompareOp.EqualTo, id));
+        }
+
+        public int Delete<T>(DbQueryItem queryItem) {
+
+            return Delete<T>(
+                new List<DbQueryItem>() {
+                    queryItem
+                }.ToArray());
+        }
+
+        public int Delete<T>(params DbQueryItem[] args) {
+
+            if (String.IsNullOrEmpty(this.ConString))
+                throw new MissingFieldException("ConnectionString");
 
             Type dstType = typeof(T);
             var propList = dstType.GetProperties();
 
             if (GetTableInfo(dstType, out string tblName, out List<Tuple<string, Type>> colNameList)) {
 
-                using (var con = new SqliteConnection(conString)) {
+                using (var con = new SqliteConnection(this.ConString)) {
 
                     using (var cmd = con.CreateCommand()) {
 
@@ -278,7 +274,7 @@ namespace SQLiteORMapper {
                                     if (!String.IsNullOrEmpty(colName)) {
 
                                         whereItemList.Add(
-                                            $"{colName} {Util.ConvertCompareOp(arg.Op)} @{colName}");
+                                            $"{colName} {ConvertCompareOp(arg.Op)} @{colName}");
 
                                         cmd.Parameters.Add(new SqliteParameter($"@{colName}", arg.Value));
                                     }
@@ -294,6 +290,7 @@ namespace SQLiteORMapper {
                         cmd.CommandText = cmdText;
                         con.Open();
 
+                        this._logger.LogDebug(cmd.CommandText);
                         return cmd.ExecuteNonQuery();
                     }
                 }
@@ -302,10 +299,10 @@ namespace SQLiteORMapper {
             return 0;
         }
 
-        public static Int64 Create(string conString, AbstractDataItem item) {
+        public Int64 Create(AbstractDataItem item) {
 
-            if (String.IsNullOrEmpty(conString))
-                throw new ArgumentNullException("ConnectionString");
+            if (String.IsNullOrEmpty(this.ConString))
+                throw new MissingFieldException("ConnectionString");
 
             if (item == null)
                 throw new ArgumentNullException("IdItem");
@@ -346,7 +343,7 @@ namespace SQLiteORMapper {
 
                 if (!DictionaryUtils.IsNullOrEmpty(valueList)) {
 
-                    using (var con = new SqliteConnection(conString)) {
+                    using (var con = new SqliteConnection(this.ConString)) {
 
                         using (var cmd = con.CreateCommand()) {
 
@@ -359,11 +356,14 @@ namespace SQLiteORMapper {
                             }
 
                             con.Open();
+
+                            this._logger.LogDebug(cmd.CommandText);
                             int result = cmd.ExecuteNonQuery();
                             if (result > 0) {
 
                                 cmd.CommandText = "select last_insert_rowid()";
 
+                                this._logger.LogDebug(cmd.CommandText);
                                 return (Int64)cmd.ExecuteScalar();
                             }
                         }
@@ -373,10 +373,10 @@ namespace SQLiteORMapper {
             return 0;
         }
 
-        public static int Update(string conString, AbstractDataItem item) {
+        public int Update(AbstractDataItem item) {
 
-            if (String.IsNullOrEmpty(conString))
-                throw new ArgumentNullException("ConnectionString");
+            if (String.IsNullOrEmpty(this.ConString))
+                throw new MissingFieldException("ConnectionString");
 
             if (item == null)
                 throw new ArgumentNullException("IdItem");
@@ -421,7 +421,7 @@ namespace SQLiteORMapper {
 
                 if (!DictionaryUtils.IsNullOrEmpty(valueList)) {
 
-                    using (var con = new SqliteConnection(conString)) {
+                    using (var con = new SqliteConnection(this.ConString)) {
 
                         using (var cmd = con.CreateCommand()) {
 
@@ -436,6 +436,8 @@ namespace SQLiteORMapper {
                                 $"WHERE id={item.Id}";
 
                             con.Open();
+
+                            this._logger.LogDebug(cmd.CommandText);
                             return cmd.ExecuteNonQuery();
                         }
                     }
@@ -444,7 +446,28 @@ namespace SQLiteORMapper {
             return 0;
         }
 
-        static bool GetTableInfo(Type type, out string table, out List<Tuple<string, Type>> colNameList) {
+        string ConvertCompareOp(CompareOp op) {
+
+            switch (op) {
+
+                case CompareOp.EqualTo:
+                    return "=";
+                case CompareOp.GreaterThan:
+                    return ">";
+                case CompareOp.GreaterThanEqualTo:
+                    return ">=";
+                case CompareOp.LessThan:
+                    return "<";
+                case CompareOp.LessThanEqualTo:
+                    return "<=";
+                case CompareOp.NotEqualTo:
+                    return "!=";
+            }
+
+            throw new ArgumentException("Unknown CompareOp");
+        }
+
+        bool GetTableInfo(Type type, out string table, out List<Tuple<string, Type>> colNameList) {
 
             table = null;
             colNameList = null;
